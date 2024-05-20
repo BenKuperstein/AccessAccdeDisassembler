@@ -1,6 +1,5 @@
 import io
 import dataclasses
-import pathlib
 
 import pyodbc
 

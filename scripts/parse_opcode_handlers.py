@@ -1,32 +1,40 @@
-import os
 import typing
-import dataclasses
 import argparse
+import dataclasses
+import pathlib
+import enum
 import time
+import logging
 
 import angr
 import pydantic
 
-import logging
+import config
 
 logging.getLogger('angr').setLevel('ERROR')
 
-ADDRESSES_FILE_BASE_ADDRESS = 0x00007ffadfea0000
-IMAGE_DEFAULT_BASE_ADDRESS = 0x180000000
-ADDRESSES_FILE_PATH = os.path.join(os.path.dirname(__file__), "addresses.txt")
+MAX_SECOND_PER_HANDLER = 5
 
 
-@dataclasses.dataclass(frozen=True)
+class OpcodeArgType(enum.Enum):
+    IMPORT_INDEX = enum.auto()
+    VAR_ADDRESS = enum.auto()
+    OTHER = enum.auto()
+
+
+@dataclasses.dataclass(frozen=__name__ == "__main__")
 class OpcodeArg:
     offset: int
     size: int
+    type: OpcodeArgType = OpcodeArgType.OTHER
 
 
 @dataclasses.dataclass
 class VariableSizeOpcodeArg:
     offset: int
     index_of_size: int
-    op_on_size: typing.Callable[int, int]
+    op_on_size: typing.Callable[[int], typing.Tuple[int, int]]
+    type: OpcodeArgType = OpcodeArgType.OTHER
 
 
 @dataclasses.dataclass
@@ -39,15 +47,17 @@ class Opcode:
     args: typing.Union[None, typing.List[typing.Union[OpcodeArg, VariableSizeOpcodeArg]]] = None
 
 
-def load_opcodes_from_db_file() -> typing.List[Opcode]:
+def load_opcodes_from_addresses_file(address_file_path: pathlib.Path,
+                                     file_base_address: int,
+                                     default_base_address: int) -> typing.Iterable[Opcode]:
     """
-    In order to create the addresses.txt file the windbg command: dps VBE7!tblDispatch L1000 was used, and the output was further edited manually
+    In order to create the addresses_vba7.txt file the windbg command: dps VBE7!tblDispatch L1000 was used, and the output was further edited manually
     """
-    with open(ADDRESSES_FILE_PATH, "r") as db_file:
+    with open(str(address_file_path), "r") as db_file:
         opcodes = {}
         for index, line in enumerate(db_file.readlines()):
             addr_str, name = line.split()
-            handler_address = int(addr_str, base=16) - ADDRESSES_FILE_BASE_ADDRESS + IMAGE_DEFAULT_BASE_ADDRESS
+            handler_address = int(addr_str, base=16) - file_base_address + default_base_address
             if name in opcodes:
                 opcodes[name].mnemonics.append(index)
             else:
@@ -55,90 +65,80 @@ def load_opcodes_from_db_file() -> typing.List[Opcode]:
         return opcodes.values()
 
 
-def main():
-    opcodes = load_opcodes_from_db_file()
+def get_handler_end_opcode_data():
+    return 0xff2485 if config.IS_32_BIT_VBA6 else 0xff24c3
+
+
+BYTECODE_START_ADDRESS = 0x2000
+BYTECODE_END_ADDRESS = 0x2100
+
+
+def generate_mapping(emulated_dll: pathlib.Path, output_mapping: pathlib.Path, opcodes: typing.Iterable[Opcode]):
     project = angr.Project(
-        r"C:\Program Files\Microsoft Office\root\vfs\ProgramFilesCommonX64\Microsoft Shared\VBA\VBA7.1\VBE7.DLL",
+        str(emulated_dll),
         auto_load_libs=True)
+
     for opcode in opcodes:
         if opcode.name in {"AddStr"}:
             continue
+        print(f"Loading {opcode.name}")
+        state = project.factory.blank_state(addr=opcode.handler_address, add_options={angr.options.CALLLESS})
+        if config.IS_32_BIT_VBA6:
+            state.regs.esi = BYTECODE_START_ADDRESS
+        else:
+            state.regs.rsi = BYTECODE_START_ADDRESS
 
-        for i in range(2):
-            print(f"Loading {opcode.name}")
-            state = project.factory.blank_state(addr=opcode.handler_address, add_options={angr.options.CALLLESS})
-            state.regs.r12 = 0x1000
-            state.regs.rsi = 0x2000
-            state.regs.rbp = 0x3000
-            state.mem[state.regs.rbp - 0xA].uint64_t = 0x4000
-            state.regs.rsp = 0x5000
-            state.regs.r14 = 0x6000
-            state.regs.rbx = 0x7000
-            state.regs.rdi = 0x8000
-            state.regs.r13 = 0x9000
-            state.regs.r15 = 0xa000
-            state.regs.gs = 0x2b
-            state.mem[state.regs.r14].uint64_t = 0xb000
-            state.mem[state.regs.r14 + 8].uint64_t = 0xc000
-            state.mem[state.regs.r14 + 16].uint64_t = 0xd000
-            state.mem[state.regs.r14 + 24].uint64_t = 0xe000
-            state.mem[state.regs.r14 + 32].uint64_t = 0xf000
-            state.mem[0xb000].uint64_t = 8
-            state.mem[0xb000 + 8].uint64_t = 0x10000
+        simgr = project.factory.simgr(state)
+        args = set()
 
-            state.mem[0xc000].uint64_t = 8
-            state.mem[0xc000 + 8].uint64_t = 0x11000
+        def on_read(s: angr.SimState):
+            read_address = s.solver.eval(s.inspect.mem_read_address)
+            if BYTECODE_START_ADDRESS <= read_address < BYTECODE_END_ADDRESS:
+                offset = read_address - BYTECODE_START_ADDRESS
+                size = s.inspect.mem_read_length
+                arg = OpcodeArg(offset, size)
+                if arg not in args:
+                    args.add(arg)
 
-            state.mem[0xd000].uint64_t = 8
-            state.mem[0xd000 + 8].uint64_t = 0x12000
+        state.inspect.b("mem_read", action=on_read)
+        start_time = time.time()
+        while not (hasattr(simgr, "over") and len(simgr.over) > 0 and args) and simgr.active:
+            simgr = simgr.step(num_inst=1)
+            simgr = simgr.move("active", "over", lambda s: s.solver.eval(
+                s.memory.load(s.addr, 3)) == get_handler_end_opcode_data())
+            simgr = simgr.move("unconstrained", "active")
+            if "Exit" in opcode.name:
+                try:
+                    simgr = simgr.move("active", "over", lambda s: s.solver.eval(s.memory.load(s.addr, 1)) == 0xc7)
+                except Exception:
+                    pass
+            if time.time() - start_time > MAX_SECOND_PER_HANDLER:
+                args = list()
+                break
+        opcode.args = list(args)
+        if len(args) > 0:
+            opcode.init = True
 
-            state.mem[0xe000].uint64_t = 8
-            state.mem[0xe000 + 8].uint64_t = 0x13000
-
-            state.mem[0xf000].uint64_t = 8
-            state.mem[0xf000 + 8].uint64_t = 0x14000
-
-            if i == 1:
-                for j in range(32):
-                    state.mem[0x2000 + j].uint8_t = 0xaa
-
-            simgr = project.factory.simgr(state)
-            args = set()
-
-            def on_read(s: angr.SimState):
-                read_address = s.solver.eval(s.inspect.mem_read_address)
-                if 0x2000 <= read_address < 0x2100:
-                    print(hex(read_address))
-                    offset = read_address - 0x2000
-                    size = s.inspect.mem_read_length
-                    arg = OpcodeArg(offset, size)
-                    if arg not in args:
-                        args.add(arg)
-
-            state.inspect.b("mem_read", action=on_read)
-            start_time = time.time()
-            while not (hasattr(simgr, "over") and len(simgr.over) > 0 and args) and simgr.active:
-                simgr = simgr.step(num_inst=1)
-                simgr = simgr.move("active", "over", lambda s: s.solver.eval(s.memory.load(s.addr, 3)) == 0xff24c3)
-                simgr = simgr.move("unconstrained", "active")
-                if "Exit" in opcode.name:
-                    simgr = simgr.move("active", "over", lambda s: s.solver.eval(s.memory.load(s.addr, 1)) == 0xc3)
-
-                if time.time() - start_time > 5:
-                    args = set()
-                    break
-            if opcode.args != None and opcode.args != args:
-                opcode.variable_length = True
-            opcode.args = args
-            if len(args) > 0:
-                opcode.init = True
-    for i in opcodes:
-        print(i)
-    with open("opcodes.json", "w") as opcode_file:
+    with open(str(output_mapping), "w") as opcode_file:
         opcode_file.write(pydantic.RootModel[typing.List[Opcode]](opcodes).model_dump_json())
-    print(f"fail count: {len([opcode for opcode in opcodes if not opcode.init])}")
-    print(f"failed: {[opcode for opcode in opcodes if not opcode.init]}")
+    print(f"Number of opcodes failed to map: {len([opcode for opcode in opcodes if not opcode.init])}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-mapping-path", type=pathlib.Path, required=True)
+    parser.add_argument("--emulated-dll-path", type=pathlib.Path, required=True)
+    parser.add_argument("--addresses-file-path", type=pathlib.Path, required=True)
+
+    if config.IS_32_BIT_VBA6:
+        addresses_file_base_address = 0x66000000
+        image_default_base_address = 0x66000000
+    else:
+        addresses_file_base_address = 0x00007ffadfea0000
+        image_default_base_address = 0x180000000
+
+    args = parser.parse_args()
+    opcodes = load_opcodes_from_addresses_file(args.addresses_file_path,
+                                               addresses_file_base_address,
+                                               image_default_base_address)
+    generate_mapping(args.emulated_dll_path, args.output_mapping_path, opcodes)
