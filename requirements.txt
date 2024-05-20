@@ -1,0 +1,4 @@
+construct == 2.10.68
+pefile == 2023.2.7
+pydantic == 2.4.2
+pyodbc == 4.0.39
