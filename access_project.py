@@ -111,8 +111,6 @@ def get_resources_of_type(srp_object, resource_type: int):
             vba_structs.get_module_prop_a(resource.value.module_flag) == resource_type]
 
 
-
-
 @dataclasses.dataclass
 class LocalFunctionImport64Bit:
     function_index: int
@@ -181,10 +179,31 @@ class VBAProject:
             self._all_functions.extend(function_names)
         self._imported_dlls: dict[str, pefile.PE] = {}
 
-    def _get_global_symbols(self, module: vba_structs.Module) -> list[Symbol]:
-        # TODO: implement
+    def _get_symbols_linked_list(self, types_buffer: bytes, starting_index: int):
+        child_offset = starting_index
         result = []
-        return []
+        while not (child_offset == -1 or child_offset == 0):
+            try:
+                child = vba_structs.DEFN.parse(types_buffer[child_offset:])
+                arg_address = child.var.const_val
+
+                try:
+                    arg_name = self._get_symbol_table_string(child.hlnam)
+                except IndexError:
+                    arg_name = "<failed_to_get_symbol>"
+
+                result.append(Symbol(arg_address, arg_name, child))
+                child_offset = child.next
+            except Exception:
+                print("Error while parsing argument names:")
+                print(traceback.format_exc())
+                break
+        return result
+
+    def _get_global_symbols(self, module: vba_structs.Module) -> list[Symbol]:
+        var_defn_offset = module.dtmb.type_data.unknown2[2]
+        types_buffer = module.dtmb.type_data.blk.blk_desc.data
+        return self._get_symbols_linked_list(types_buffer, var_defn_offset)
 
     def _get_functions_symbols(self, module: vba_structs.Module) -> dict[str, list[Symbol]]:
         result = {}
@@ -197,17 +216,7 @@ class VBAProject:
                 function_children = vba_structs.DEFN_CHILDREN_ARRAY.parse(
                     types_buffer[function_defn.children_offset:])
                 for child_offset in function_children:
-                    while not (child_offset == -1 or child_offset == 0):
-                        try:
-                            child = vba_structs.DEFN.parse(types_buffer[child_offset:])
-                            arg_address = child.var.const_val
-                            arg_name = self._get_symbol_table_string(child.hlnam)
-                            args.append(Symbol(arg_address, arg_name, child))
-                            child_offset = child.next
-                        except Exception:
-                            print("Error while parsing argument names:")
-                            print(traceback.format_exc())
-                            break
+                    args.extend(self._get_symbols_linked_list(types_buffer, child_offset))
 
             function_name = self._get_symbol_table_string(function_defn.hlnam)
             result[function_name] = args

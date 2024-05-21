@@ -23,7 +23,7 @@ def disassemble_all(file_path: str):
         disassembler = vba_disassembler.Disassembler(opcodes_file_path)
         for module in project.modules:
             vba_module = project.get_vba_module(module.name)
-            print(f"Module: module.name")
+            print(f"Module: {module.name}")
             for function in vba_module.function_name_to_function.values():
                 try:
                     print(f"Function: {function.name}")
