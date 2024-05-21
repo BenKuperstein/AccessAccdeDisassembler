@@ -1,14 +1,15 @@
 import os
 import argparse
 import pathlib
+import traceback
 
 import access_file
 import access_project
 import config
 import vba_disassembler
 
-VBA6_OPCODE_FILE = os.path.join(os.path.dirname(__file__), "generated/opcodes_vba6.json")
-VBA7_OPCODE_FILE = os.path.join(os.path.dirname(__file__), "generated/opcodes_vba7.json")
+VBA6_OPCODE_FILE = pathlib.Path(__file__).parent.joinpath("generated/opcodes_vba6.json")
+VBA7_OPCODE_FILE = pathlib.Path(__file__).parent.joinpath("generated/opcodes_vba7.json")
 
 def disassemble_all(file_path: str):
     if config.IS_32_BIT_VBA6:
@@ -22,14 +23,14 @@ def disassemble_all(file_path: str):
         disassembler = vba_disassembler.Disassembler(opcodes_file_path)
         for module in project.modules:
             vba_module = project.get_vba_module(module.name)
-            print(module.name)
+            print(f"Module: module.name")
             for function in vba_module.function_name_to_function.values():
                 try:
                     print(f"Function: {function.name}")
                     print(disassembler.disassemble(vba_module, function.name))
                 except Exception:
-                    raise
-                    print(f"Failed to parse func {function.name}")
+                    print(f"Failed to parse func {function.name}:")
+                    print(traceback.format_exc())
 
 
 if __name__ == "__main__":
