@@ -131,7 +131,7 @@ def add_custom_opcodes(original_opcodes: typing.List[parse_opcode_handlers.Opcod
             opcode.args[1].type = OpcodeArgType.IMPORT_INDEX
         if "LitStr" in opcode_name:
             opcode.args[0].type = OpcodeArgType.IMPORT_INDEX
-        if "FLdRf" in opcode_name or "Var" in opcode_name or "FLdPr" in opcode_name or "FSt" in opcode_name:
+        if len([i for i in ("Var", "FLd", "FSt") if i in opcode_name]):
             if len(opcode.args) > 0:
                 opcode.args[0].type = OpcodeArgType.VAR_ADDRESS
 

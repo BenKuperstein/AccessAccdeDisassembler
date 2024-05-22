@@ -603,10 +603,8 @@ RTMI = Struct(
     "data_size" / SIZE_T_SIGNED,
     "code_size" / If(lambda ctx: ctx.data_size != -1, SIZE_T_SIGNED),
     "data" / If(lambda ctx: ctx.data_size != -1, Bytes(this.data_size)),
-    "pointers" / If(lambda ctx: ctx.data_size != -1,
-                    RepeatUntil(lambda x, lst, ctx: x.address > 0x1000000 or x.unk2 != 0, Fixup)),
-    # This is hacky, we are doing it so because the code of rsedesctbl is not complete
-    If(lambda ctx: ctx.data_size != -1, Seek(-8 if config.IS_32_BIT_VBA6 else -12, 1)) # This
+    "pointers" / Peek(RepeatUntil(lambda x, lst, ctx: x.address > 0x1000000 or x.unk2 != 0, Fixup)),
+    Bytes(lambda ctx: (8 if config.IS_32_BIT_VBA6 else 12) * (len(ctx.pointers) - 1 if ctx.pointers else 0))
 )
 
 Resource1 = Struct(
@@ -670,10 +668,10 @@ Resource13 = Struct(
     "data" / Bytes(this.count)
 )
 Resource13_ = Struct(
-    "shit_size" / Int16ul,
-    "content" / get_rsedesctbl(this.size),
-    "pointers" / RepeatUntil(lambda x, lst, ctx: x.unk2 != 0, Fixup),
-    Seek(-8 if config.IS_32_BIT_VBA6 else -12, 1)
+    "size" / Int16ul,
+    "content" / Bytes(this.size),
+    "pointers" / Peek(RepeatUntil(lambda x, lst, ctx: x.unk2 != 0, Fixup)),
+    Bytes(lambda ctx: (8 if config.IS_32_BIT_VBA6 else 12) * (len(ctx.pointers) - 1 if ctx.pointers else 0))
 )
 
 Resource14 = Struct(
@@ -682,6 +680,12 @@ Resource14 = Struct(
     "unk2" / Int16ul,
     "data" / Bytes(this.count + 1),
     "pointer" / If(lambda ctx: ctx.unk1 == 3, Fixup)
+)
+Resource15 = Struct(
+    "count" / Int16ul,
+    "unk1" / Int16ul,
+    "unk2" / Int32ul,
+    "unk3" / Array(this.count * 2, Int32ul)
 )
 
 Resource18 = Struct(
@@ -782,6 +786,7 @@ def get_srp_resource(module_flag: SIZE_T, srp_info: SRPInfo):
                 12: Resource12,
                 13: Resource13_ if config.IS_32_BIT_VBA6 else Resource13,
                 14: Resource14,
+                15: Resource15,
                 18: Resource18,
                 19: Resource19,
                 20: Resource20,

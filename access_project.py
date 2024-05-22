@@ -167,7 +167,7 @@ class VBAProject:
         self._module_index_to_module_info: dict[int, VBAModuleInfo] = {}
 
         for i, module in enumerate(self._project_resource.modules):
-            module_name = self._resolve_fixup(module.name, inner_value=True).decode()
+            module_name = self._resolve_fixup(module.name, inner_value=True).decode("ascii")
             function_names = [try_decode_ascii(self._resolve_fixup(function_name_fixup, inner_value=True)) for
                               function_name_fixup
                               in
