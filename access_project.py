@@ -24,8 +24,11 @@ VBA_PROJECT_PATH = posixpath.join(VBA_FILES_DIR_PATH, "_VBA_PROJECT")
 POINTER_SIZE = 4 if config.IS_32_BIT_VBA6 else 8
 RESOURCE_TAG_SIZE = POINTER_SIZE
 
-IMPORTED_DLL_LOOKUP_DIR = \
-    r"C:\Program Files\Microsoft Office\root\vfs\ProgramFilesCommonX64\Microsoft Shared\VBA\VBA7.1"
+if config.IS_32_BIT_VBA6:
+    IMPORTED_DLL_LOOKUP_DIR = r"C:\Program Files (x86)\Common Files\Microsoft Shared\VBA\VBA6"
+else:
+    IMPORTED_DLL_LOOKUP_DIR = \
+        r"C:\Program Files\Microsoft Office\root\vfs\ProgramFilesCommonX64\Microsoft Shared\VBA\VBA7.1"
 
 
 def get_memory_representation(module_flag: int, resource) -> list[tuple[typing.Any, int]]:
