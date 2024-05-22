@@ -99,7 +99,7 @@ pip install -r requirements.txt
 ### Running
 
 ```cmd
-python disassemble_accde.py --accde-file-path "path/to/your/file.accde" --output-folder-path "path/to/output/folder" --vba6
+python disassemble.py --accde-file-path "path/to/your/file.accde" --output-folder-path "path/to/output/folder" --vba6
 ```
 
 - `--accde-file-path` (required): Path to the ACCDE file you want to disassemble.
